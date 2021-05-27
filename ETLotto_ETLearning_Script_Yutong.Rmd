@@ -1,0 +1,205 @@
+---
+title: "ETLotto&Learning Analysis"
+output: html_notebook
+---
+
+```{r}
+library(readr)
+library(stringr)
+library(tidyverse)
+library(data.table)
+```
+```{r}
+setwd("C:/Users/ekw28/OneDrive - Yale University/Desktop/ETLotto_ETLearning/data")
+# LearnData <- read.csv("learning_data_raw.csv")
+
+LottoData = lotto_data_raw_csv
+LearnData =  learning_data_raw_csv
+# LottoData=read.csv("lotto_data_raw.csv")
+# FBAI<-read.csv("~/Documents/LevyLab analysis/fbaiForYutong.csv")
+```
+##Lotto  
+Calculate the proportion of lottery choices for each participant:
+```{r}
+LottoData$lottoEV<-LottoData$lottoVal*LottoData$lottoProb
+
+#initiate empty data frames of risk metric
+RM<-data.frame(matrix(nrow=length(unique(LottoData$id)),ncol=11))
+colnames(RM)<-c("id","isMV","FBAI","propLottery","propEVLott","propEVLottNRep","propEVLottRep","propRNeu","propOCS","propNotOCS","propOCSRNeu")
+
+#loop through all subjects
+for (subjID in unique(LottoData$id)){
+subjData<-filter(LottoData,id==subjID)
+RM$id[subjID]<-subjID
+RM$isMV[subjID]<-subjData$isMV[1]
+
+RM$FBAI[subjID]<-median((subjData$valDisplayFrames-subjData$probDisplayFrames)/2)
+
+#proportion of lottery choices every subject
+RM$propLottery[subjID]<-sum(subjData$choseLotto)/length(subjData$choseLotto) 
+
+#proportion of lottery choices that are made based on EV
+RM$propEVLott[subjID]<-sum(subjData$lottoEV>=subjData$refVal&subjData$choseLotto==1)/length(subjData$lottoEV)
+
+#proportion of lottery choice that are made based on EV, separating repeated and non-repeated trials
+nonRep<-filter(subjData,isRepeat==0)
+RM$propEVLottNRep[subjID]<-sum(nonRep$lottoEV>nonRep$refVal&nonRep$choseLotto==1)/sum(nonRep$lottoEV)
+
+Rep<-filter(subjData,isRepeat==1)
+RM$propEVLottRep[subjID]<-sum(Rep$lottoEV>Rep$refVal&Rep$choseLotto==1)/sum(Rep$lottoEV)
+
+#proportion of OCS that are made based on EV
+RM$propOCS[subjID]<-sum(subjData[subjData$OCSindex==TRUE&subjData$lottoEV>5,"choseLotto"]==1)/length(subjData[subjData$OCSindex==TRUE,"choseLotto"])
+
+RM$propNotOCS[subjID]<-sum(subjData[subjData$OCSindex==FALSE&subjData$lottoEV>5,"choseLotto"]==1)/length(subjData[subjData$OCSindex==FALSE,"choseLotto"])
+
+}
+```
+
+##Learning  
+Plot single subject Learning ratings:
+```{r}
+trialSum<-data.frame(matrix(nrow=length(unique(LearnData$id)),ncol=8))%>%setNames(c("id","revOnTrial","AcqTrial","RevTrial","AcqCS1","AcqCS0","RevCS1","RevCS0"))
+rewardSum<-data.frame(matrix(nrow=length(unique(LearnData$id)),ncol=14))%>%setNames(seq(1,14))
+
+revNum<-20
+aNum<-14
+rNum<-14
+
+subjACS1<-data.frame(matrix(nrow=100,ncol=aNum))
+subjACS0<-data.frame(matrix(nrow=100,ncol=aNum))
+
+subjRCS1<-data.frame(matrix(nrow=100,ncol=rNum))
+subjRCS0<-data.frame(matrix(nrow=100,ncol=rNum))
+
+
+allAcq<-data.frame()
+allRev<-data.frame()
+
+for (subjID in unique(LearnData$id)){#unique(LearnData$id)
+  subjData<- filter(LearnData,id==subjID)%>%add_column(Learn=NA,CS=0)
+  subjData$rating[subjData$rating==0]<-NA
+  reward<-filter(subjData,rectValue==6)
+  revOnTrial<-reward$trialNum[8]
+  revOri<-subjData[revOnTrial,"rectOri"]
+
+  #identify the learning trials, label Learn column with 1
+  subjData$Learn[1:(revOnTrial-1)]<-rep(1,(revOnTrial-1))
+  subjData$Learn[revOnTrial:70]<-rep(0,(71-revOnTrial))
+  #identify CS+ as 1 or CS- as 0
+  subjData$CS[subjData$rectOri!=revOri]<-1
+  subjData$CS[subjData$rectOri==revOri]<-0
+  
+  
+  Acq<-filter(subjData,Learn==1,rectValue==0)#[1:28,]
+  Rev<-filter(subjData,Learn==0,rectValue==0)#[1:revNum,]
+  allAcq<-rbind(allAcq,Acq)
+  allRev<-rbind(allRev,Rev)
+  
+  if (dim(Rev)[1]>=1){#revNum
+  subjACS1[subjID,]<-filter(Acq,CS==1)$rating[1:aNum] # 100*14 matrix
+  subjACS0[subjID,]<-filter(Acq,CS==0)$rating[1:aNum]# 100*14 matrix
+  subjRCS1[subjID,]<-c(filter(Rev,CS==1)$rating[1:rNum])#,rep(NA,(rNum-length(filter(Rev,CS==1)$rating))))
+  subjRCS0[subjID,]<-c(filter(Rev,CS==0)$rating[1:rNum])#,rep(NA,(rNum-length(filter(Rev,CS==0)$rating))))}
+  
+  RM[subjID,"AcqEarlyCS1"]<-rowMeans(subjACS1[subjID,c(1:7)],na.rm = TRUE) # early acquisition CS+
+  RM[subjID,"AcqEarlyCS0"]<-rowMeans(subjACS0[subjID,c(1:7)],na.rm = TRUE) # early acquisition CS-
+  RM[subjID,"AcqLateCS1"]<-rowMeans(subjACS1[subjID,c(8:14)],na.rm = TRUE) # early acquisition CS+
+  RM[subjID,"AcqLateCS0"]<-rowMeans(subjACS0[subjID,c(8:14)],na.rm = TRUE) # early acquisition CS-
+  }
+  else{
+  subjACS1[subjID,]<-rep(NA,(aNum)) # 100*14 matrix
+  subjACS0[subjID,]<-rep(NA,(aNum))# 100*14 matrix
+  subjRCS1[subjID,]<-rep(NA,(rNum))#,rep(NA,(rNum-length(filter(Rev,CS==1)$rating))))
+  subjRCS0[subjID,]<-rep(NA,(rNum))
+  
+  RM[subjID,"AcqEarlyCS1"]<-NA
+  RM[subjID,"AcqEarlyCS0"]<-NA
+  RM[subjID,"AcqLateCS1"]<-NA
+  RM[subjID,"AcqLateCS0"]<-NA
+  }
+  
+  RM[subjID,"FirstRating"]<-subjData[subjData$trialNum==1,"rating"]
+  RM[subjID,"FirstCS1Rating"]<-subjData[subjData$CS==1,"rating"][1]
+  RM[subjID,"FirstCS0Rating"]<-subjData[subjData$CS==0,"rating"][1]
+
+  trialSum[subjID,1]<- subjID
+  trialSum[subjID,2]<- revOnTrial
+  trialSum[subjID,3]<- length(Acq$trialNum) 
+  trialSum[subjID,4]<- length(Rev$trialNum)
+  trialSum[subjID,5]<- length(filter(Acq,CS==1)$trialNum)
+  trialSum[subjID,6]<- length(filter(Acq,CS==0)$trialNum)
+  trialSum[subjID,7]<- length(filter(Rev,CS==1)$trialNum)
+  trialSum[subjID,8]<- length(filter(Rev,CS==0)$trialNum)
+  rewardSum[subjID,]<-reward$trialNum
+}
+RM$AcqLateDiff<-RM$AcqLateCS1-RM$AcqLateCS0
+RM$AcqEarlyDiff<-RM$AcqEarlyCS1-RM$AcqEarlyCS0
+RM$AcqCS1Diff<-RM$AcqLateCS1-RM$AcqEarlyCS1
+RM$AcqCS0Diff<-RM$AcqLateCS0-RM$AcqEarlyCS0
+RM$isMV<-as.factor(RM$isMV)%>%relevel(ref = "FALSE")
+```
+
+```{r}
+  colnames(subjACS1)<-c(1:aNum)
+  colnames(subjACS0)<-c(1:aNum)
+  colnames(subjRCS1)<-c(1:rNum)
+  colnames(subjRCS0)<-c(1:rNum)
+  
+avg<-data.frame(NumExp=c(1:(aNum+rNum)))%>%add_column(CS1=c(colMeans(subjACS1,na.rm = TRUE),colMeans(subjRCS1,na.rm=TRUE)),CS0=c(colMeans(subjACS0,na.rm = TRUE),colMeans(subjRCS0,na.rm=TRUE)))%>%reshape2::melt(id="NumExp")
+
+SD<-data.frame(NumExp=c(1:(aNum+rNum)))%>%add_column(CS1=c(t(summarise_if(subjACS1,is.numeric, sd, na.rm=TRUE)),t(summarise_if(subjRCS1,is.numeric, sd, na.rm=TRUE))),CS0=c(t(summarise_if(subjACS0,is.numeric, sd, na.rm=TRUE)),t(summarise_if(subjRCS0,is.numeric, sd, na.rm=TRUE))))%>%reshape2::melt(id="NumExp")
+
+avg$SD<-SD$value
+
+EarlyAcqCS1 <- colMeans(subjACS1[,1:7],na.rm=TRUE)%>%print()
+LateAcqCS1 <- colMeans(subjACS1[,8:14],na.rm=TRUE)%>%print()
+EarlyAcqCS0 <- colMeans(subjACS0[,1:7],na.rm=TRUE)%>%print()
+LateAcqCS0 <- colMeans(subjACS0[,8:14],na.rm=TRUE)%>%print()
+
+
+#all<-rbind(select(allAcq,id,rating,Learn,CS),select(allRev,id,rating,Learn,CS))
+toLong<-function(Short){
+  Short$id<-row.names(Short)
+  Long<-reshape2::melt(Short,id="id")%>%setNames(c("id","NumExp","rating"))
+  Long$NumExp<-as.integer(Long$NumExp)
+  return(Long)
+}
+
+LACS0<-data.frame(toLong(subjACS0))
+LACS1<-data.frame(toLong(subjACS1))
+LRCS0<-data.frame(toLong(subjRCS0))
+LRCS1<-data.frame(toLong(subjRCS1))
+
+```
+
+
+
+Meeting with Emily (Feb 9)
+Set 1:
+[28,14] - include everyone
+100*28
+100*14
+mean->1*28
+mean->1*14
+Set 2:
+[28,18] - 99 subjects, exclude the subject with rev trial = 14
+99*28
+99*18
+mean->1*28
+mean->1*18
+Set 3:
+[28,19] - 98 subjects, exclude the subjects with rev trial = 14, 18
+98*28
+98*19
+mean->1*28
+mean->1*19
+Set 4:
+[28,20] - 96 subjects, exclude the subjects with rev trial = 14, 18, 19
+96*28
+96*20
+mean->1*28
+mean->1*20
+
+
+

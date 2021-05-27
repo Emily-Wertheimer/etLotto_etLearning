@@ -1,0 +1,293 @@
+---
+title: "ETLotto_ETLearning_analysis"
+author: Emily Wertheimer
+---
+
+## LEARNING ANALYSIS
+```{r}
+rm(list = ls())
+```
+
+# load libraries
+```{r}
+library(ggplot2)
+library(ggpubr)
+library(tidyverse)
+library(dplyr)
+```
+
+# load data (IMPORT BY HAND)
+```{r}
+# setwd("C:/Users/ekw28/OneDrive - Yale University/Desktop/ETLotto_ETLearning/data")
+
+# data_raw <- read.csv("raw_data.csv", header = TRUE)
+# data_unrewarded <- read.csv("cleaned_data_unrewarded.csv", header = TRUE)
+# data_summary <- read.csv("all_subs_summary_data.csv", header = TRUE)
+
+trial_summary <- learning_trial_summary_2
+learning_data_raw <- learning_data_raw_csv
+learning_unrewarded <- learning_data_unrewarded2
+# lotto_data_raw <- lotto_data_raw_csv
+
+```
+
+# create/fill matrices for ratings in unrewarded acq trials (acq cs+, acq cs-)
+```{r}
+thresholdAcq <- 14 
+
+# create acq ratings matrices
+ratings_acq_csp <- data.frame(matrix(nrow=100,ncol=thresholdAcq))
+ratings_acq_csm <- data.frame(matrix(nrow=100,ncol=thresholdAcq))
+
+for (i in unique(learning_unrewarded$id)){
+  subjData <- filter(learning_unrewarded, learning_unrewarded$id == i)
+  subjData$rating[subjData$rating==0] <- NA
+  acqCSP <- filter(subjData, acq_rev == 1, csp_csm == 1)
+  acqCSM <- filter(subjData,acq_rev == 1, csp_csm == 0)
+  
+  for (j in 1:ncol(ratings_acq_csp)) {
+    ratings_acq_csp[i,j] <- acqCSP$rating[j]
+  }
+
+  for (j in 1:ncol(ratings_acq_csm)){
+    ratings_acq_csm[i,j] <- acqCSM$rating[j]
+  }
+}
+```
+
+# create/fill matrices for ratings in unrewarded rev trials (rev cs+, rev cs-)
+```{r}
+thresholdRev <- 7 # change this number to change the set 
+
+# create rev ratings matrices
+ratings_rev_csp <- data.frame(matrix(nrow=100,ncol=thresholdRev))
+ratings_rev_csm <- data.frame(matrix(nrow=100,ncol=thresholdRev))
+
+# loop through all subs, retrieve current sub's data, filter by conditions, get ratings, put into appropriate ratings_rev
+for (i in unique(learning_unrewarded$id)){
+  subjData <- filter(learning_unrewarded, id == i)
+  subjData$rating[subjData$rating==0] <- NA
+  revCSP <- filter(subjData, acq_rev == 0, csp_csm == 1)
+  revCSM <- filter(subjData,acq_rev == 0, csp_csm == 0)
+  
+  for (j in 1:ncol(ratings_rev_csp)) {
+    ratings_rev_csp[i,j] <- revCSP$rating[j]
+  }
+
+  for (j in 1:ncol(ratings_rev_csm)){
+    ratings_rev_csm[i,j] <- revCSM$rating[j]
+  }
+}
+
+```
+
+# write matrices
+```{r}
+write.csv(ratings_acq_csp, file="ratings_acq_csp.csv")
+write.csv(ratings_acq_csm, file="ratings_acq_csm.csv")
+write.csv(ratings_rev_csp, file="ratings_rev_csp.csv")
+write.csv(ratings_rev_csm, file="ratings_rev_csm.csv")
+
+```
+
+## MODELING
+
+RESCORLA-WAGNER MODEL:   ∆V = αβ(λ − ΣV)
+  - learning occurs when there is an error and prediction
+      Change in associative strength = learning rate(|unconditioned stimulus|-sum of associative strengths for all CS's)
+      Change in associative strength= learning rate(prediction error)
+  - quantifies change in associative strength of a stim after any given trial
+  - prediction error is weighted by alpha
+      alpha is a constant between 0-1; higher = faster learning and vice versa
+
+deltaV = change in associative strength
+alpha = learning rate (0-1; higher alpha = higher learning rate)
+lambda = absolute value of unconditioned stim
+vTotal = sum of all strengths for CSs
+pe = lambda - vTotal # prediction error 
+
+# SUB 1
+```{r}
+# reformat data 
+nTrials <- as.numeric(70)
+learning_rf_sub1 <- data.frame(matrix(nrow = nTrials, ncol = 7)) # learning reformatted for HJ's scripts
+cols <- c("Stage", "Number", "ID", "Rating", "Stimulus", "Reinforce", "Phase")
+colnames(learning_rf_sub1) <- cols
+
+# col 1: Stage (acq/rev)
+for (i in 1:nTrials) { # for sub1
+  # identify reversal index
+  nTrials <- 70
+  first_reward_trial <- match(1, learning_data_raw$rectValue == 6) # trial num of first reward
+  first_reward_ori <- sub_oris[first_reward_trial] # stim ori @ first reward
+  rev_trial <- match(1,sub_oris != first_reward_ori & sub_rewards != 0)
+                               
+  # label Stage col as acq/rev   1: rev index -1 = acq; rev index:end = rev
+  vecAcq <- vector(mode = "character", length = nTrials)
+  vecAcq[1:rev_trial-1] <- "Acq"
+  vecAcq[rev_trial:length(vecAcq)] <- "Rev"
+  
+  # put vecAcq into proper place in learning_rf$Stage
+  learning_rf_sub1$Stage <- vecAcq
+  
+}
+
+# col 2: Number(1-100)
+learning_rf_sub1$Number <- learning_data_raw$id[1:70] # id (1-100)
+
+# col 3: ID (10-120)
+learning_rf_sub1$ID <- learning_data_raw$subjNum[1:70] # subj num (10-120)
+
+# col 4: Rating
+learning_rf_sub1$Rating <- learning_data_raw$rating[1:70]
+
+# col 5: Stimulus (A = CS+/B = CS-)
+sub1Data <- learning_data_raw[1:70,]
+for (i in sub1Data$id[1:70]) {
+  currentID <- sub1Data$id[i]
+  sub_indices <- sub1Data$id == currentID
+  sub_oris <- sub1Data$rectOri[sub_indices]
+  sub_rewards <- sub1Data$rectValue[sub_indices]
+  first_reward_trial <- match(1, sub_rewards == 6) 
+  first_reward_ori <- sub1Data$rectOri[first_reward_trial] 
+
+  vecStim <- ifelse(sub_oris == first_reward_ori, "A", "B")
+  
+  learning_rf_sub1$Stimulus[sub_indices] <- vecStim
+}
+
+# col 6: Reinforce (TRUE/FALSE)
+reward1 <- learning_data_raw$rectValue[1:70]
+vecReinforce1 <- ifelse(reward1 > 0, "TRUE", "FALSE")
+learning_rf_sub1$Reinforce <- vecReinforce1
+
+# label col 7 as acq1, acq2, rev1, rev2 --> HARD CODE FOR SUB 1
+learning_rf_sub1$TrialNum <- learning_data_raw$trialNum[1:nTrials]
+learning_rf_sub1$Phase[1:18] <- "Acq1" # 1:18 = first half of acq
+learning_rf_sub1$Phase[19:37] <- "Acq2" # 19-37 = second half acq
+learning_rf_sub1$Phase[38:55] <- "Rev1" # 38-54 = first half rev
+learning_rf_sub1$Phase[56:70] <- "Rev2" # 55-70 = second half rev
+
+# write sub1 reformatted df (use in Hyojung's Matlab functions for fitting)
+write.csv(learning_rf_sub1, file="learning_rf_sub1.csv")
+
+```
+
+
+# for all subs
+```{r}
+# create df: 7000x7
+  #cols: stage (Acq/Rev), Number (subjNum), ID (subjID), Rating, Stimulus (A = CS+, B = CS-), Reinforce (TRUE/FALSE),     # Phase (Acq1, Acq2, Rev1, Rev2)
+learning_rf <- data.frame(matrix(nrow = nrow(learning_data_raw), ncol = 7)) # learning reformatted for HJ's scripts
+cols <- c("Stage", "Number", "ID", "SP", "Stimulus", "Reinforce", "Phase")
+colnames(learning_rf) <- cols
+```
+
+```{r}
+# col 3: ID 
+learning_rf$ID <- learning_data_raw$id # id (1-110) 
+
+# col 2: trial num
+learning_rf$Number <- learning_data_raw$trialNum # id (1-100)
+
+# col 6: Reinforce (TRUE/FALSE)
+reward <- learning_data_raw$rectValue
+vecReinforce <- ifelse(reward > 0, "TRUE", "FALSE")
+learning_rf$Reinforce <- vecReinforce
+
+```
+
+```{r}
+# col 1: Stage (Acq/Rev)
+for (i in unique(learning_rf$ID)) { # for e/ sub
+  currentID <- learning_rf$ID[i] # set curent id
+  sub_indices <- learning_rf$ID == currentID # get sub indices
+  sub_oris <- learning_data_raw$rectOri[sub_indices] # get stim oris @ sub indices
+  sub_rewards <- learning_data_raw$rectValue[sub_indices] # get rewards @ sub indices 
+  
+  # identify reversal index
+  nTrials <- 70
+  first_reward_trial <- match(1, sub_rewards == 6) # trial num of first reward
+  first_reward_ori <- sub_oris[first_reward_trial] # stim ori @ first reward
+  rev_trial <- match(1,sub_oris != first_reward_ori & sub_rewards != 0)
+                               
+  # label Stage col as acq/rev   1: rev index -1 = acq; rev index:end = rev
+  
+  learning_rf$Stage[sub_indices[1:rev_trial - 1]] <- "Acq"
+  learning_rf$Stage[sub_indices[rev_trial:length(sub_indices)]] <- "Rev"
+  
+  
+  
+}
+
+```
+
+
+
+```{r}
+# col 4: Rating (called SP)
+learning_rf$SP <- learning_data_raw$rating
+```
+
+```{r}
+# col 5: Stimulus (A = CS+/B = CS-)
+for (i in learning_data_raw$id) {
+  currentID <- learning_data_raw$id[i]
+  sub_indices <- learning_data_raw$id == currentID
+  sub_oris <- learning_data_raw$rectOri[sub_indices]
+  sub_rewards <- learning_data_raw$rectValue[sub_indices]
+  first_reward_trial <- match(1, sub_rewards == 6) 
+  first_reward_ori <- learning_data_raw$rectOri[first_reward_trial] 
+
+  vecStim <- ifelse(sub_oris == first_reward_ori, "A", "B")
+  
+  learning_rf$Stimulus[sub_indices] <- vecStim
+}
+```
+
+
+```{r}
+# col 7: Phase(Acq1, Acq2/ Rev1, Rev2)
+for (i in unique(learning_rf$ID){ # for e/ sub
+  currentID <- learning_rf$ID[i]
+  sub_indices <- learning_rf$ID == currentID
+  nAcq <- sum(learning_rf$Stage[sub_indices] == 'Acq')
+  nRev <- sum(learning_rf$Stage[sub_indices] == 'Rev')
+  learning_rf$Phase[1:nAcq/2-1]
+  
+  # find num of acq trials
+  # find num rev trials 
+  # num acq trials/2
+  #1:nAcq/2-1 <- Acq1
+  #nAcq:end <- Acq2
+  #num rev trials/2
+  #1:nRev <- Rev1
+  #nRev:end <- Rev2
+  
+}
+
+
+# learning_rf$TrialNum <- learning_data_raw$trialNum
+
+# for (i in unique(learning_data_raw$id)){
+#   currentID <- learning_data_raw$id[i] 
+#   sub_indices <- learning_data_raw$id == currentID
+#   
+#   stageVecAcq <- vector(mode = "character", length = length(learning_rf$Stage[sub_indices] == "Acq"))
+#   stageVecRev <- vector(mode = "character", length = length(learning_rf$Stage[sub_indices] == "Rev"))
+# 
+#   subAcq <- learning_rf$Stage[sub_indices] == "Acq"
+#   subRev <- learning_rf$Stage[sub_indices] == "Rev"
+#   
+#   nAcq <- length(subAcq)
+#   nRev <- subRev <-length(subRev)
+# 
+#   stageVecAcq <- ifelse(learning_rf$TrialNum[sub_indices] < nAcq/2, "Acq1", "Acq2")
+#   stageVecRev <- ifelse(learning_rf$TrialNum[sub_indices] < nRev/2, "Rev1", "Rev2")
+#   
+#   stageVec <- c(stageVecAcq,stageVecRev)
+#   learning_rf$Stage[sub_indices] <- stageVec
+#   
+}
+```
+
